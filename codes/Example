@@ -1,0 +1,4 @@
+labeller = ChurnLabeler()
+df = labeller.generate_data()
+df2 = labeller.label_churn(df, recent_time="data", method="cdf", time_delta=True)
+df2

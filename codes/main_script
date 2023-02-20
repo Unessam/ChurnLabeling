@@ -1,0 +1,83 @@
+import datetime
+import random
+import numpy as np
+import pandas as pd
+from itertools import chain
+
+class ChurnLabeler:
+    
+    def _get_random_dates(self, num):
+            start = datetime.datetime(2022, 1, 1)
+            end = datetime.datetime(2022, 3, 1)
+            lst = []
+            for _ in range(0, 10):
+                d1 = start + datetime.timedelta(
+                    seconds=random.randint(0, (end - start).total_seconds()))
+                lst.append(d1)
+            return sorted(lst)
+        
+    def generate_data(self):
+        dates = self._get_random_dates(random.randint(5, 10))
+        lst2 = []
+        for user in (np.random.randint(100, 200, size=3)).tolist():
+            res = [(user, date) for date in dates]
+            lst2.append(res)
+        final_lst = [c for c in chain.from_iterable(lst2)]
+        df = pd.DataFrame(final_lst, columns = ["user", "datetime"])
+        return df
+
+    def _get_timedelta(self, df, recent_time = "data"):
+        # df: dataset
+        # recent_time: comparing the last user transaction to the most recent date in dataset or now
+        # perform tests to make sure: 
+        ### 1.input is a pandas dataset
+        ### 2.datasent has only 2 columns
+        ### 3.one column has datetime data type format
+        try:
+            assert isinstance(df, pd.DataFrame), "Input is not a pandas DataFrame"
+            assert len(df.columns) == 2, "Input does not have exactly two columns"
+            col_types = df.dtypes
+            assert col_types[col_types == 'datetime64[ns]'].count() == 1, "Input does not have exactly one datetime column"
+            counts = df.groupby(df.columns[0]).count()[df.columns[1]]
+            assert (counts >= 4).all(), "Not all IDs have at least 4 datetime observations"
+            print("All conditions are met")
+        except AssertionError as error:
+            raise ValueError("Error: " + str(error))
+
+        df = df.sort_values(by=["user", "datetime"])
+        df['timediff'] = (df.groupby('user')['datetime'].shift(-1) - df['datetime']) / pd.Timedelta(seconds=1)
+        if recent_time == "data":
+            df['timediff'] = df['timediff'].fillna((df['datetime'].max() - df['datetime']) / pd.Timedelta(seconds=1))
+        else:
+            df['timediff'] = df['timediff'].fillna((datetime.datetime.now() - df['datetime']) / pd.Timedelta(seconds=1))
+        df["days"] = df["timediff"]/(60*60*24)
+        return df
+
+    def label_churn(self, df, recent_time="data", method="z", time_delta=False):
+        df = self._get_timedelta(df, recent_time)
+        # cdf: cumulative density function, if data point is greater than 95 percentile then outlier
+        # z: z score, if data point is 3 unit away then outlier
+        # rz: robust z score, if data point is 3 unit away then outlier
+        # time_delta: if True then include "days" column which shows timedelta in days
+        grouped = df.groupby("user")
+        if method == "z":
+            # calculate z-score for each user's timediff
+            df["timediff_zscore"] = grouped["timediff"].apply(lambda x: (x - x.mean()) / x.std())
+            df["churn"] = df["timediff_zscore"].apply(lambda x: 1 if x>=3 else 0)
+        if method == "rz":
+            # calculate median and MAD for each user's timediff
+            df_med = grouped["timediff"].median()
+            df_mad = grouped["timediff"].apply(lambda x: np.median(np.abs(x - x.median())))
+
+            # calculate robust z-score for each user's timediff
+            df["timediff_robustz"] = grouped["timediff"].apply(lambda x: 0.6745 * (x - df_med[x.name]) / df_mad[x.name])
+            df["churn"] = df["timediff_robustz"].apply(lambda x: 1 if x>=3 else 0)
+        if method == "cdf":
+            # calculate percentile for each user's timediff
+            df["timediff_percentile"] = grouped["timediff"].rank(pct=True)
+            df["churn"] = df["timediff_percentile"].apply(lambda x: 1 if x>=0.95 else 0)
+        if time_delta == True:
+            df = df.drop(["timediff"], axis=1)
+        if time_delta == False:
+            df = df.drop(["timediff", "days"], axis=1)
+        return df
